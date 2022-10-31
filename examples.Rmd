@@ -1,0 +1,186 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(GGally)
+library(tidytext)
+library(wordcloud2) 
+library(topicmodels)
+```
+
+| Field | Question |
+| :- | :- |
+| timestamp | Timestamp |
+| q1 | How many hours did you sleep last night? |
+| q2 | How many hours did you work (e.g. do homework, or a job) after you left school? |
+| **q3** **| How many hours did you spend relaxing after you left school?** |
+| q4 | What did you do to relax last night? |
+| q5 | How do you feel today? |
+| q6 | Which best describes you (your answer should be the same every day) |
+
+
+## Start by labelling your data
+
+- Labeling help you understand your data
+- Folks often overestimate how long it takes
+- If outsourcing...
+  - Start by labeling the data yourself
+  - Have an odd number of people labeling
+  - Come up with consistent rules (heuristics)
+
+```{r}
+# Use set_names to name columns
+
+survey_df <- read_csv("survey_results.csv") %>%
+  set_names(
+    c(
+      "timestamp",
+      "q1",
+      "q2", 
+      "q3",
+      "q4",
+      "q5",
+      "q6",
+      "watch_shows_movies",
+      "sleep",
+      "chat",
+      "food",
+      "friends",
+      "video_games",
+      "listen_music",
+      "book"
+    )
+  )
+survey_df
+```
+
+## Plot Bar Chart of Common Tags
+
+```{r}
+# Select label columns
+# Use colSums to get sum of each column
+# Use stack to get "long" format of column sums
+
+survey_df %>%
+  select(
+    watch_shows_movies,
+    sleep,
+    chat,
+    food,
+    friends,
+    video_games,
+    listen_music,
+    book
+  ) %>%
+  colSums() %>%
+  stack() %>%
+  ggplot() +
+    geom_bar(aes(x = values, y = ind), stat = "identity")
+```
+
+## Plot Correlation Between Tags
+
+```{r}
+# Use select and ggcorr to plot correlations
+survey_df %>%
+  select(
+    watch_shows_movies,
+    sleep,
+    chat,
+    food,
+    friends,
+    video_games,
+    listen_music,
+    book
+  ) %>%
+  ggcorr()
+```
+
+## Plot Word Counts
+
+Each **document** is a response, and each **token** is a word.
+
+```{r}
+# select the q4 column
+# unnest_tokens separates each documents into tokens
+# count() the occurrences of each token
+# set the width and height while ggsave
+survey_df %>%
+  select(q4) %>%
+  unnest_tokens(word, q4) %>%
+  count(word, sort = TRUE) %>%
+  ggplot() +
+    geom_bar(aes(y = reorder(word, n), x = n), stat = "identity")
+
+ggsave(
+  filename = "word_counts.png",
+  width = 5,
+  height = 10
+)
+```
+
+## Word Clouds (and why they not as good)
+https://r-graph-gallery.com/196-the-wordcloud2-library.html
+Warning: https://www.data-to-viz.com/graph/wordcloud.html
+
+```{r}
+survey_df %>%
+  select(q4) %>%
+  unnest_tokens(word, q4) %>%
+  count(word) %>%
+  wordcloud2()
+```
+
+## Topic Modelling
+https://www.tidytextmining.com/topicmodeling.html
+
+```{r}
+survey_lda <- survey_df %>%
+  select(q4) %>%
+  mutate(document = 1:n()) %>%
+  unnest_tokens(word, q4) %>%
+  group_by(document) %>%
+  add_count(word) %>%
+  cast_dtm(term = word, document = document, value = n) %>%
+  LDA(k = 2, control = list(seed = 1234))
+
+survey_topics <- tidy(survey_lda, matrix = "beta")
+survey_topics
+```
+
+```{r}
+survey_top_terms <- survey_topics %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 10) %>% 
+  ungroup() %>%
+  arrange(topic, -beta)
+
+survey_top_terms %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered()
+```
+
+
+```{r}
+beta_wide <- survey_topics %>%
+  mutate(topic = paste0("topic", topic)) %>%
+  pivot_wider(names_from = topic, values_from = beta) %>% 
+  filter(topic1 > .001 | topic2 > .001) %>%
+  mutate(log_ratio = log2(topic2 / topic1))
+
+beta_wide %>%
+  ggplot() +
+  geom_bar(aes(y = reorder(term, log_ratio), x = log_ratio), stat = "identity")
+
+ggsave(
+  filename = "two_topic_model.png",
+  width = 5,
+  height = 10
+)
+```
